@@ -15,6 +15,7 @@
 use futures_util::TryFutureExt;
 use http::{Method, Response, StatusCode};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::os::fd::RawFd;
 use std::sync::Arc;
 use std::time::Instant;
 use tls_listener::AsyncTls;
@@ -85,7 +86,11 @@ impl Inbound {
         self.listener.local_addr()
     }
 
-    pub async fn run(self) {
+    pub(super) fn listener_fd(&self) -> RawFd {
+        self.listener.as_raw_fd()
+    }
+
+    pub(super) async fn run(self) {
         let pi = self.pi.clone();
         let acceptor = InboundCertProvider {
             local_workload: self.pi.local_workload_information.clone(),

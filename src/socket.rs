@@ -14,6 +14,8 @@
 
 use std::io::Error;
 use std::net::SocketAddr;
+use std::os::fd::RawFd;
+use std::os::unix::io::AsRawFd;
 
 use tokio::io;
 
@@ -159,6 +161,9 @@ impl Listener {
     }
     pub fn local_addr(&self) -> SocketAddr {
         self.listener.local_addr().expect("local_addr is available")
+    }
+    pub fn as_raw_fd(&self) -> RawFd {
+        self.0.as_raw_fd()
     }
     pub fn inner(self) -> TcpListener {
         self.listener
