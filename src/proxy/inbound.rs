@@ -273,6 +273,11 @@ impl Inbound {
                 // preservation depends on `enable_original_source`.
                 let upstream_src_ip = if pi.disable_inbound_freebind {
                     None
+                } else if let Some(forwarded_ip) = ri.forwarded_src {
+                    // Prefer the original client IP from the FORWARDED header (e.g. when
+                    // traffic arrives via a waypoint proxy). This ensures the loopback
+                    // delivery connection uses the true client IP, not the waypoint's IP.
+                    enable_original_source.then_some(forwarded_ip)
                 } else {
                     enable_original_source.then_some(ri.rbac_ctx.conn.src.ip())
                 };
@@ -400,6 +405,14 @@ impl Inbound {
         };
 
         let for_host = parse_forwarded_host(req);
+        let forwarded_src = req
+            .headers()
+            .get(http::header::FORWARDED)
+            .and_then(|rh| rh.to_str().ok())
+            .and_then(proxy::parse_forwarded_for);
+        if let Some(ref src_ip) = forwarded_src {
+            debug!(%src_ip, "extracted original client IP from FORWARDED header");
+        }
         let baggage = if pi.cfg.enable_enhanced_baggage {
             parse_baggage_header(req.headers().get_all(BAGGAGE_HEADER)).unwrap_or_default()
         } else {
@@ -479,6 +492,7 @@ impl Inbound {
         let result_tracker = Box::new(connection_result_builder.build());
         Ok(InboundRequest {
             for_host,
+            forwarded_src,
             rbac_ctx,
             result_tracker,
             upstream_addr,
@@ -696,6 +710,11 @@ pub(super) struct TunnelRequest {
 #[derive(Debug)]
 struct InboundRequest {
     for_host: Option<String>,
+    /// Original client IP extracted from the FORWARDED header's `for=` field.
+    /// When a waypoint is in the path, conn.src is the waypoint's IP, but the
+    /// FORWARDED header carries the true original client IP. Used for freebind
+    /// delivery to preserve source identity on the loopback connection.
+    forwarded_src: Option<IpAddr>,
     rbac_ctx: ProxyRbacContext,
     result_tracker: Box<ConnectionResult>,
     upstream_addr: SocketAddr,
