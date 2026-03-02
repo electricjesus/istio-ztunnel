@@ -809,6 +809,28 @@ pub fn parse_forwarded_host(input: &str) -> Option<String> {
         .filter(|host| !host.is_empty())
 }
 
+/// Extracts the original client IP from a FORWARDED header's `for=` field.
+/// The FORWARDED header format is: `for="<ip:port>";host=<host>;proto=<proto>`
+/// Returns just the IP address (without port) if found.
+pub fn parse_forwarded_for(input: &str) -> Option<std::net::IpAddr> {
+    if !input.is_ascii() {
+        return None;
+    }
+    input
+        .split(';')
+        .find(|part| part.trim().starts_with("for="))
+        .and_then(|for_part| {
+            let val = for_part.trim().strip_prefix("for=")?;
+            let val = val.strip_prefix('"').unwrap_or(val);
+            let val = val.strip_suffix('"').unwrap_or(val);
+            // Value is "ip:port" — parse as SocketAddr to extract IP
+            val.parse::<std::net::SocketAddr>()
+                .map(|sa| sa.ip())
+                .or_else(|_| val.parse::<std::net::IpAddr>())
+                .ok()
+        })
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum HboneAddress {
     SocketAddr(SocketAddr),
@@ -907,5 +929,50 @@ mod tests {
         assert_eq!(parse_forwarded_host(header), None);
         let header = r#"for=for;by=by;host=host;proto="pröto""#;
         assert_eq!(parse_forwarded_host(header), None);
+    }
+
+    #[test]
+    fn test_parse_forwarded_for() {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+        // Standard format: for="ip:port"
+        let header = r#"for="192.168.1.10:54321";host=example.com;proto=https"#;
+        assert_eq!(
+            parse_forwarded_for(header),
+            Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)))
+        );
+
+        // Without quotes
+        let header = "for=10.0.0.1:8080;host=example.com";
+        assert_eq!(
+            parse_forwarded_for(header),
+            Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))
+        );
+
+        // IP only (no port)
+        let header = "for=10.0.0.1;host=example.com";
+        assert_eq!(
+            parse_forwarded_for(header),
+            Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))
+        );
+
+        // IPv6 with brackets and port
+        let header = r#"for="[::1]:8080";host=example.com"#;
+        assert_eq!(
+            parse_forwarded_for(header),
+            Some(IpAddr::V6(Ipv6Addr::LOCALHOST))
+        );
+
+        // No for= field
+        let header = "by=identifier;host=example.com;proto=https";
+        assert_eq!(parse_forwarded_for(header), None);
+
+        // Invalid IP in for= field
+        let header = "for=notanip;host=example.com";
+        assert_eq!(parse_forwarded_for(header), None);
+
+        // Non-ASCII
+        let header = r#"for="192.168.1.1:80";host=höst"#;
+        assert_eq!(parse_forwarded_for(header), None);
     }
 }
